@@ -270,4 +270,7 @@ def main():
 
 
 if __name__ == '__main__':
+    # Перехваченный вывод в Windows идёт в cp1251, где нет «×» и т.п. — заменяем, а не падаем.
+    if hasattr(sys.stdout, 'reconfigure'):  # нет консоли (pythonw) — stdout может быть None
+        sys.stdout.reconfigure(errors='replace')
     main()

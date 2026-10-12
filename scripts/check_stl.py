@@ -51,6 +51,10 @@ def check(path):
 
 
 if __name__ == '__main__':
+    # Когда вывод перехвачен (Claude, субагент, `> файл`), Windows печатает в cp1251, где нет
+    # символов вроде «≈» и «³» — без этой строки скрипт падал с UnicodeEncodeError.
+    if hasattr(sys.stdout, 'reconfigure'):  # нет консоли (pythonw) — stdout может быть None
+        sys.stdout.reconfigure(errors='replace')
     if len(sys.argv) < 2:
         sys.exit('Использование: py check_stl.py файл.stl [ещё.stl ...]')
     ok = all([check(p) for p in sys.argv[1:]])
