@@ -1,7 +1,8 @@
 # Готовые куски кода для скриптов Fusion
 
 Все сниппеты выполняются **внутри Fusion** через `fusion_mcp_execute` (`featureType: "script"`).
-Координаты в коде — см, в выводе — мм. Все сниппеты проверены вживую (сентябрь 2026).
+Координаты в коде — см, в выводе — мм. Все сниппеты проверены вживую (1–13 — сентябрь 2026,
+14–16 — 25–26.10.2026).
 
 **Как собирать скрипт.** Берёшь шаблон из раздела 1 и вставляешь нужные куски **внутрь
 `run()`**. Вспомогательные функции (`report`, `halfspace` и т.п.) можно оставлять на верхнем
@@ -22,6 +23,9 @@
 11. Экспорт STL и STEP
 12. Кадр вида в PNG
 13. Импорт сетки (STL / OBJ / 3MF) в компонент Scan
+14. «Пересадка узла» с одной детали на другую (временные тела)
+15. STL своим кодом: ось Z вверх, низ на столе
+16. Проверка посадки: радиальный профиль и проба подъёмом
 
 ## 1. Шаблон скрипта
 
@@ -374,3 +378,135 @@ print('meshes:', lst.count if lst else None, '| nodes', mb.mesh.nodeCount, 'tria
       '| bbox mm', bb_mm(mb.boundingBox))
 ```
 Сверь габарит с реальной деталью (см. `reverse-engineering.md`, шаг 0).
+
+## 14. «Пересадка узла» с одной детали на другую
+
+Проверено 25.10.2026 (составная труба: байонет с проверенной секции перенесён на соседние
+детали). Когда на детали B нужен **точно такой
+же** узел (гнездо, штырь, замок, резьба), как на уже проверенной детали A: не рисовать заново, а
+вырезать кусок A и вставить в B. Всё считается во временных телах, в документ — одним
+базовым элементом.
+
+Порядок: 1) кусок A = A ∩ цилиндр (или брусок) зоны узла; 2) перевести кусок и B в общую
+систему (например: ось вдоль Y, центр в 0, опорная плоскость узла на y = 0); 3) из B вырезать
+старый узел, добавить кусок; 4) проверить, что вышло **одно** тело (`lumps.count == 1`).
+
+В коде ниже деталь A **уже стоит осью по Y с центром в начале координат** (как секция трубы в том
+проекте); если нет — сначала переведи и её, как B в шаге 2. Числа — пример из того проекта
+(см): подставь свои.
+```python
+# внутри run(); A_body, B_body — тела, единицы см
+TB = adsk.fusion.TemporaryBRepManager.get()
+PC, VEC = adsk.core.Point3D.create, adsk.core.Vector3D.create    # не V: V в шаблоне — ValueInput
+BT = adsk.fusion.BooleanTypes
+R_CUT = 3.1                 # радиус цилиндра, которым вырезаем узел (чуть больше узла)
+A_Y0, A_Y1 = 14.95, 16.4    # зона узла на детали A по Y; A_Y0 — опорная плоскость (уступ)
+B_OLD_R = 2.9               # чем вырезаем старый узел на B
+B_Y0, B_Y1 = 13.0, 15.0     # зона старого узла на B (в общей системе); B_Y0 — опорная плоскость
+def cyl(r, y0, y1, r1=None):                 # сплошной цилиндр/конус вдоль Y
+    return TB.createCylinderOrCone(PC(0, y0, 0), r, PC(0, y1, 0), r if r1 is None else r1)
+def moved(b, dx=0, dy=0, dz=0):
+    b = TB.copy(b); m = adsk.core.Matrix3D.create(); m.translation = VEC(dx, dy, dz); TB.transform(b, m); return b
+
+piece = TB.copy(A_body)                                           # 1) кусок узла A
+TB.booleanOperation(piece, cyl(R_CUT, A_Y0, A_Y1), BT.IntersectionBooleanType)
+piece = moved(piece, dy=-A_Y0)                                    #    опорная плоскость -> y=0
+
+b = TB.copy(B_body)                                               # 2) B в той же системе
+m = adsk.core.Matrix3D.create()
+m.setToRotation(-math.pi / 2, VEC(1, 0, 0), PC(0, 0, 0))          #    ось Z -> ось Y: y'=z, z'=-y
+t = adsk.core.Matrix3D.create(); t.translation = VEC(-cx, -zmin, cy)  # центр (cx, cy) и низ zmin детали B
+m.transformBy(t); TB.transform(b, m)
+
+TB.booleanOperation(b, cyl(B_OLD_R, B_Y0, B_Y1), BT.DifferenceBooleanType)  # 3) старый узел долой
+TB.booleanOperation(b, moved(piece, dy=B_Y0), BT.UnionBooleanType)          #    новый — на его место
+print('lumps', b.lumps.count, 'shells', b.shells.count, 'vol mm3 %.1f' % (b.volume * 1000))  # 4)
+
+# в документ: новый компонент с базовым элементом (или bf.updateBody для замены)
+occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+bf = occ.component.features.baseFeatures.add(); bf.startEdit()
+occ.component.bRepBodies.add(b, bf); bf.finishEdit()
+```
+- Сначала прогони всё **без** добавления в документ (только `print` объёмов и `lumps`):
+  временные тела документ не меняют, такой скрипт можно запускать с `readOnly: true`.
+- Центр и низ детали B бери из её геометрии (ось цилиндрической грани нужного радиуса,
+  `boundingBox.minPoint`), а не «на глаз». Помни про см: центр −80 мм — это `-8.0`, а не `-80`.
+- Касание плоскостями (кусок встаёт на срез B) булева операция объединяет нормально; проверка —
+  `lumps.count == 1`.
+- После пересадки — **проверка посадки** с ответной деталью (сниппет 16): дополнительные
+  заливки и скосы рядом с узлом легко съедают зазор.
+
+## 15. STL своим кодом: ось Z вверх, низ на столе
+
+Проверено 25.10.2026. Штатный экспорт пишет STL в системе координат компонента; деталь,
+построенная с осью Y вверх, ляжет в слайсере на бок. Здесь сетку считает Fusion, а файл и
+поворот — наш код (двоичный STL, мм).
+```python
+import struct
+def write_stl_zup(body, path):
+    calc = body.meshManager.createMeshCalculator()
+    calc.setQuality(adsk.fusion.TriangleMeshQualityOptions.VeryHighQualityTriangleMesh)
+    mesh = calc.calculate()                       # TriangleMesh: здесь правильно nodeIndices
+    c, idx = mesh.nodeCoordinatesAsDouble, mesh.nodeIndices
+    # Y вверх (см) -> Z вверх (мм): x' = x, y' = -z, z' = y; затем низ на z = 0
+    pts = [(c[i]*10, -c[i+2]*10, c[i+1]*10) for i in range(0, len(c), 3)]
+    zmin = min(p[2] for p in pts)
+    pts = [(p[0], p[1], p[2] - zmin) for p in pts]
+    n = len(idx) // 3
+    with open(path, 'wb') as f:
+        f.write(b'part, mm, Z up'.ljust(80, b' '))
+        f.write(struct.pack('<I', n))
+        for t in range(n):
+            a, b, d = pts[idx[3*t]], pts[idx[3*t+1]], pts[idx[3*t+2]]
+            u = (b[0]-a[0], b[1]-a[1], b[2]-a[2]); v = (d[0]-a[0], d[1]-a[1], d[2]-a[2])
+            nx, ny, nz = u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]
+            L = (nx*nx + ny*ny + nz*nz) ** 0.5 or 1.0
+            f.write(struct.pack('<12fH', nx/L, ny/L, nz/L, *a, *b, *d, 0))
+    return n
+```
+- Для детали, у которой ось уже Z, убери поворот: `pts = [(c[i]*10, c[i+1]*10, c[i+2]*10) ...]`.
+- Видимость тела не важна (в отличие от штатного экспорта). После — `check_stl.py`: сетка
+  замкнута, габарит и объём совпадают с телом.
+
+## 16. Проверка посадки: радиальный профиль и проба подъёмом
+
+Проверено 26.10.2026 (поиск и проверка исправления упора торца штыря, см. `print-export.md`,
+«Проверка посадок»). Для тел вращения с осью Y (центр в 0), единицы — мм в выводе.
+Числа (`r0`, `r1`, `ang`, высоты) — для того проекта: подставь свои.
+```python
+IN = adsk.fusion.PointContainment.PointInsidePointContainment
+def first_solid_r(body, y_mm, r0=24.0, r1=28.5, ang=17.0, step=0.02):
+    """Радиус (мм), с которого на высоте y начинается материал; луч под углом ang от оси X."""
+    a = math.radians(ang)
+    for k in range(int((r1 - r0) / step) + 1):
+        r = round(r0 + k * step, 3)          # без накопления ошибки: 24.38, а не 24.380000000000003
+        if body.pointContainment(adsk.core.Point3D.create(r/10*math.cos(a), y_mm/10, r/10*math.sin(a))) == IN:
+            return r
+    return None
+# 1) профиль: эталон и новая деталь рядом. y — высота от обода гнезда; если обод эталона
+#    стоит не на y=0 (например, на y=-2 мм), передай его сдвиг: REF_OFF = -2.0
+REF_OFF = 0.0
+for y in [12 + 0.25*i for i in range(17)]:
+    print('%5.2f' % y, first_solid_r(ref_body, y + REF_OFF), first_solid_r(new_body, y))
+# угол ang выбирай вне пазов/рёбер или сними профиль под двумя углами
+
+# 2) проба подъёмом: ответная деталь без «законных» упоров (у штыря — без лапок),
+#    в рабочем положении; сдвигаем её в сторону свободного торца — туда, где он может
+#    упереться (у нас торец штыря смотрит вверх, к дну гнезда, поэтому +Y). temp-тела, readOnly.
+TB = adsk.fusion.TemporaryBRepManager.get()
+def overlap_mm3(a, b):
+    t = TB.copy(a)
+    TB.booleanOperation(t, TB.copy(b), adsk.fusion.BooleanTypes.IntersectionBooleanType)
+    return t.volume * 1000 if t.faces.count else 0.0
+for lift in (0.0, 0.5, 0.9, 0.95, 1.05, 1.5):
+    t = TB.copy(mate); m = adsk.core.Matrix3D.create()
+    m.translation = adsk.core.Vector3D.create(0, lift/10, 0); TB.transform(t, m)
+    print(lift, ['%.2f' % overlap_mm3(t, s) for s in (ref_socket, new_socket)])
+```
+- В рабочем положении (подъём 0) пересечение должно быть 0. Касание, которое начинается при
+  подъёме, у новой детали должно совпадать с эталоном до нужного зазора и отличаться только
+  после него (у нас — одинаково до 0.95 мм, разница с 1.05 мм = зазор 1 мм).
+- Почему не `analyzeInterference` с `areCoincidentFacesIncluded = True`: он поймает зазор
+  ровно 0, но не покажет зазор 0.1 мм там, где нужен 1 мм. Проба подъёмом меряет сам зазор.
+- Профиль показывает и ошибку направления: если «скос» на таблице даёт материал там, где у
+  эталона пусто (или наоборот), — инструмент построен зеркально.

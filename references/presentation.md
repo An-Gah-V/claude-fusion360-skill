@@ -27,7 +27,7 @@ Fusion ещё и медленный. Поэтому кадры рисует `ren
    (сниппет 9) — папку с `pts.f32` / `nrm.f32`.
 4. Пробные кадры (`<scripts>` — папка программ скилла, см. SKILL.md):
    ```
-   py <scripts>\render_video.py --stl part.stl --scan <папка скана> --out C:\Projects\<имя>\presentation.mp4 --test --title "Корпус камеры" --deviation "отклонение ≈ 0,2–0,3 мм" --final "Bambu Lab H2S · STL + STEP"
+   py <scripts>\render_video.py --stl part.stl --scan <папка скана> --out C:\Projects\<имя>\presentation.mp4 --test --title "Корпус датчика" --deviation "отклонение ≈ 0,2–0,3 мм" --final "Готово к печати · STL + STEP"
    ```
    Кадры лягут рядом с видео: `presentation_test_NNN.png`. Посмотри их (Read): деталь целиком в
    кадре, подписи читаются?

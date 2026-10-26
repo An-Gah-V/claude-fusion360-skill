@@ -1,7 +1,12 @@
 # Проверка STL перед 3D-печатью: замкнутость сетки, габариты, объём.
 # Запуск вне Fusion:  py check_stl.py деталь.stl [ещё.stl ...]
 # Понимает двоичный (binary) и текстовый (ASCII) STL. Fusion по умолчанию пишет двоичный, в мм.
-import struct, sys
+import os, struct, sys
+
+# Один поток для математики numpy (OpenBLAS): иначе при нехватке памяти на некоторых
+# Windows-машинах numpy падает с «OpenBLAS error: Memory allocation still failed».
+# Задаём до импорта numpy, только если пользователь не задал сам.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
 import numpy as np
 
